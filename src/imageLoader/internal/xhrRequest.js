@@ -1,7 +1,136 @@
 import external from '../../externalModules.js';
 import { getOptions } from './options.js';
 
-function xhrRequest(url, imageId, defaultHeaders = {}, params = {}) {
+function _axiosRequest(url, imageId, defaultHeaders = {}, params = {}) {
+  const authorizedAxiosClient = window.authorizedAxiosClient;
+  const { cornerstone } = external;
+  const options = getOptions();
+
+  const errorInterceptor = (xhr) => {
+    if (typeof options.errorInterceptor === 'function') {
+      const error = new Error('request failed');
+
+      error.request = xhr;
+      error.response = xhr.response;
+      error.status = xhr.status;
+      options.errorInterceptor(error);
+    }
+  };
+
+  const beforeSendHeaders = options.beforeSend(
+    new XMLHttpRequest(),
+    imageId,
+    defaultHeaders,
+    params
+  );
+
+  const headers = {};
+  const mergedHeaders = Object.assign({}, defaultHeaders, beforeSendHeaders);
+
+  Object.keys(mergedHeaders).forEach(function (key) {
+    if (mergedHeaders[key] === null) {
+      return;
+    }
+    if (key === 'Accept' && url.indexOf('accept=') !== -1) {
+      return;
+    }
+    headers[key] = mergedHeaders[key];
+  });
+
+  return new Promise((resolve, reject) => {
+    const axiosOptions = {
+      method: 'GET',
+      url,
+      headers,
+      responseType: 'arraybuffer',
+      onDownloadProgress: (oProgress) => {
+        const loaded = oProgress.loaded; // evt.loaded the bytes browser receive
+
+        let total;
+
+        let percentComplete;
+
+        if (oProgress.lengthComputable) {
+          total = oProgress.total; // evt.total the total bytes seted by the header
+          percentComplete = Math.round((loaded / total) * 100);
+        }
+
+        // Action
+        if (options.onprogress) {
+          options.onprogress(oProgress, params);
+        }
+
+        // Event
+        const eventData = {
+          url,
+          imageId,
+          loaded,
+          total,
+          percentComplete,
+        };
+
+        cornerstone.triggerEvent(
+          cornerstone.events,
+          cornerstone.EVENTS.IMAGE_LOAD_PROGRESS,
+          eventData
+        );
+      },
+    };
+
+    params.deferred = {
+      resolve,
+      reject,
+    };
+    params.url = url;
+    params.imageId = imageId;
+
+    if (options.onloadstart) {
+      options.onloadstart(
+        {
+          lengthComputable: false,
+          loaded: 0,
+          target: null,
+          total: 100,
+        },
+        params
+      );
+    }
+
+    const eventData = {
+      url,
+      imageId,
+    };
+
+    cornerstone.triggerEvent(
+      cornerstone.events,
+      'cornerstoneimageloadstart',
+      eventData
+    );
+
+    authorizedAxiosClient
+      .request(axiosOptions)
+      .then(({ data }) => {
+        if (options.onloadend) {
+          options.onloadend(
+            {
+              lengthComputable: false,
+              loaded: 100,
+              target: null,
+              total: 100,
+            },
+            params
+          );
+        }
+        resolve(data || []);
+      })
+      .catch((error) => {
+        errorInterceptor(error);
+        reject(error);
+      });
+  });
+}
+
+function _xhrRequest(url, imageId, defaultHeaders = {}, params = {}) {
   const { cornerstone } = external;
   const options = getOptions();
 
@@ -164,6 +293,14 @@ function xhrRequest(url, imageId, defaultHeaders = {}, params = {}) {
     };
     xhr.send();
   });
+}
+
+function xhrRequest(url, imageId, defaultHeaders = {}, params = {}) {
+  const authorizedAxiosClient = window.authorizedAxiosClient;
+
+  return authorizedAxiosClient
+    ? _axiosRequest(url, imageId, defaultHeaders, params)
+    : _xhrRequest(url, imageId, defaultHeaders, params);
 }
 
 export default xhrRequest;
